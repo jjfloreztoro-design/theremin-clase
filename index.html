@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Theremin Maestro v2</title>
+    
+    <!-- Librerías IA (Versión Robusta) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+    
+    <style>
+        body { background: #111; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+        /* HEADER */
+        #header { height: 50px; background: #222; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; z-index: 10; border-bottom: 1px solid #444; }
+        
+        .mode-switch { display: flex; background: #333; border-radius: 20px; padding: 2px; border: 1px solid #555; }
+        .mode-opt { padding: 6px 15px; cursor: pointer; border-radius: 18px; font-size: 0.85rem; font-weight: bold; color: #888; transition: 0.2s; }
+        .mode-opt.active { background: #00d2d3; color: black; box-shadow: 0 0 10px rgba(0,210,211,0.4); }
+
+        #btn-full { background: #e74c3c; color: white; border: none; padding: 6px 15px; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 0.85rem; }
+        #btn-full:hover { background: #c0392b; }
+
+        /* STAGE */
+        #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; justify-content: center; }
+        canvas { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }
+
+        /* HUD */
+        #hud { position: absolute; top: 10px; width: 100%; display: flex; justify-content: center; gap: 15px; pointer-events: none; z-index: 5; }
+        .badge { background: rgba(0,0,0,0.6); padding: 5px 15px; border-radius: 10px; border: 2px solid #555; text-align: center; min-width: 100px; transition: opacity 0.3s; }
+        .val { font-size: 1.8rem; font-weight: bold; display: block; line-height: 1; margin-top: 2px; }
+        .lbl { font-size: 0.7rem; text-transform: uppercase; color: #bbb; letter-spacing: 1px; }
+
+        /* CONTROLES */
+        #controls { height: 120px; background: #181818; display: flex; justify-content: center; align-items: center; gap: 12px; border-top: 3px solid #333; flex-wrap: wrap; padding: 5px; }
+        .col { display: flex; flex-direction: column; align-items: center; opacity: 1; transition: opacity 0.3s; }
+        .col.disabled { opacity: 0.3; pointer-events: none; }
+        
+        label { font-size: 0.65rem; color: #888; font-weight: bold; margin-bottom: 3px; text-transform: uppercase; }
+        select { background: #333; color: white; border: 1px solid #555; padding: 6px; border-radius: 6px; min-width: 110px; font-size: 0.85rem; cursor: pointer; }
+        select:hover { border-color: #00d2d3; }
+
+        /* Estilos específicos */
+        .c-vol select { border-bottom: 3px solid #e67e22; }
+        .c-t1 select { border-bottom: 3px solid #2ecc71; }
+        .c-t2 select { border-bottom: 3px solid #00d2d3; }
+
+        /* SPLASH */
+        #splash { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 1000; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        #btn-start { padding: 20px 50px; font-size: 1.5rem; background: #333; color: #666; border: none; border-radius: 50px; cursor: not-allowed; transition: 0.3s; }
+        #btn-start.ready { background: linear-gradient(90deg, #00d2d3, #2ecc71); color: #000; cursor: pointer; box-shadow: 0 0 30px rgba(0,210,211,0.3); }
+    </style>
+</head>
+<body>
+
+    <div id="splash">
+        <h1 style="font-size: 3rem; margin-bottom: 20px; color:white;">Theremin Maestro v2</h1>
+        <button id="btn-start">Cargando...</button>
+        <p id="log" style="color:#555; margin-top:20px;">Iniciando sistema...</p>
+    </div>
+
+    <div id="header">
+        <div class="mode-switch">
+            <div class="mode-opt active" onclick="setMode(1)" id="mode-1">👤 1 Voz</div>
+            <div class="mode-opt" onclick="setMode(2)" id="mode-2">👥 2 Voces</div>
+        </div>
+        <button id="btn-full" onclick="toggleFull()">⛶ PANTALLA COMPLETA</button>
+    </div>
+
+    <div id="stage">
+        <div id="hud">
+            <div class="badge" style="border-color:#2ecc71"><span class="lbl">Tono 1</span><span id="ui-t1" class="val" style="color:#2ecc71">--</span></div>
+            <div class="badge" style="border-color:#e67e22"><span class="lbl">Volumen</span><span id="ui-vol" class="val" style="color:#e67e22">0%</span></div>
+            <div class="badge" id="badge-t2" style="border-color:#00d2d3; opacity:0.3;"><span class="lbl">Tono 2</span><span id="ui-t2" class="val" style="color:#00d2d3">OFF</span></div>
+        </div>
+        <canvas id="output_canvas"></canvas>
+        <video id="input_video" style="display:none;" playsinline></video>
+    </div>
+
+    <div id="controls">
+        <!-- SELECTORES DE CUERPO UNIFICADOS -->
+        <!-- Opciones: Nariz(0), Hombros(11,12), Codos(13,14), Manos(15,16) -->
+        
+        <div class="col c-t1">
+            <label>Cuerpo Tono 1</label>
+            <select id="body-t1">
+                <option value="16">✋ Mano Derecha</option>
+                <option value="15">✋ Mano Izquierda</option>
+                <option value="0">👃 Nariz</option>
+                <option value="14">💪 Codo Derecho</option>
+                <option value="13">💪 Codo Izquierdo</option>
+                <option value="12">🤷 Hombro Der.</option>
+                <option value="11">🤷 Hombro Izq.</option>
+            </select>
+        </div>
+        
+        <div class="col c-t2 disabled" id="grp-t2">
+            <label>Cuerpo Tono 2</label>
+            <select id="body-t2">
+                <option value="15">✋ Mano Izquierda</option>
+                <option value="16">✋ Mano Derecha</option>
+                <option value="0">👃 Nariz</option>
+                <option value="13">💪 Codo Izquierdo</option>
+                <option value="14">💪 Codo Derecho</option>
+                <option value="11">🤷 Hombro Izq.</option>
+                <option value="12">🤷 Hombro Der.</option>
+            </select>
+        </div>
+
+        <div class="col c-vol">
+            <label>Cuerpo Volumen</label>
+            <select id="body-vol">
+                <option value="0">👃 Nariz</option>
+                <option value="15">✋ Mano Izquierda</option>
+                <option value="16">✋ Mano Derecha</option>
+                <option value="11">🤷 Hombro Izq.</option>
+                <option value="12">🤷 Hombro Der.</option>
+                <option value="13">💪 Codo Izquierdo</option>
+                <option value="14">💪 Codo Derecho</option>
+            </select>
+        </div>
+
+        <!-- MUSICA -->
+        <div class="col">
+            <label>Escala</label>
+            <select id="scale-sel">
+                <option value="major">😃 Mayor</option>
+                <option value="minor">😢 Menor</option>
+                <option value="pent_maj">🎸 Pentatónica</option>
+                <option value="blues">🎷 Blues</option>
+                <option value="chromatic">🎹 Cromática</option>
+            </select>
+        </div>
+        
+        <div class="col">
+            <label>Nota Base</label>
+            <select id="root-sel">
+                <option value="C">Do (C)</option>
+                <option value="C#">Do# (C#)</option>
+                <option value="D">Re (D)</option>
+                <option value="Eb">Mi b (Eb)</option>
+                <option value="E">Mi (E)</option>
+                <option value="F">Fa (F)</option>
+                <option value="F#">Fa# (F#)</option>
+                <option value="G">Sol (G)</option>
+                <option value="Ab">La b (Ab)</option>
+                <option value="A">La (A)</option>
+                <option value="Bb">Si b (Bb)</option>
+                <option value="B">Si (B)</option>
+            </select>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. GESTIÓN DE MODO ---
+        let activeVoices = 1;
+        function setMode(n) {
+            activeVoices = n;
+            document.getElementById('mode-1').classList.toggle('active', n===1);
+            document.getElementById('mode-2').classList.toggle('active', n===2);
+            
+            const grp2 = document.getElementById('grp-t2');
+            const badge2 = document.getElementById('badge-t2');
+            
+            if (n === 1) {
+                grp2.classList.add('disabled');
+                badge2.style.opacity = '0.3';
+                document.getElementById('ui-t2').innerText = "OFF";
+                if(gain2) gain2.gain.value = 0;
+            } else {
+                grp2.classList.remove('disabled');
+                badge2.style.opacity = '1';
+                document.getElementById('ui-t2').innerText = "--";
+            }
+        }
+
+        function toggleFull() {
+            if(!document.fullscreenElement) document.documentElement.requestFullscreen();
+            else if(document.exitFullscreen) document.exitFullscreen();
+        }
+
+        // --- 2. CARGA ---
+        const btn = document.getElementById('btn-start');
+        const log = document.getElementById('log');
+        let t = setInterval(() => {
+            if(window.Pose) {
+                clearInterval(t);
+                btn.innerText = "¡EMPEZAR!";
+                btn.classList.add('ready');
+                log.innerText = "Listo.";
+            } else {
+                log.innerText = "Cargando IA... " + Math.random().toFixed(2);
+            }
+        }, 500);
+
+        // --- 3. MOTOR AUDIO ---
+        let audioCtx, osc1, osc2, gain1, gain2, masterVol;
+        let isAudio = false;
+
+        btn.onclick = async () => {
+            if(!btn.classList.contains('ready')) return;
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AC();
+                
+                masterVol = audioCtx.createGain();
+                masterVol.gain.value = 0;
+                masterVol.connect(audioCtx.destination);
+
+                // Tono 1 (Triangle - Principal)
+                osc1 = audioCtx.createOscillator(); osc1.type = 'triangle';
+                gain1 = audioCtx.createGain(); gain1.gain.value = 0.8;
+                osc1.connect(gain1); gain1.connect(masterVol);
+
+                // Tono 2 (Sine - Armonía)
+                osc2 = audioCtx.createOscillator(); osc2.type = 'sine';
+                gain2 = audioCtx.createGain(); gain2.gain.value = 0.8;
+                osc2.connect(gain2); gain2.connect(masterVol);
+
+                osc1.start(); osc2.start();
+                isAudio = true;
+                if(activeVoices === 1) gain2.gain.value = 0;
+
+                const stream = await navigator.mediaDevices.getUserMedia({video: true});
+                const v = document.getElementById('input_video');
+                v.srcObject = stream;
+                v.onloadedmetadata = () => {
+                    v.play();
+                    genScale();
+                    startTracking(v);
+                    document.getElementById('splash').style.display = 'none';
+                };
+            } catch(e) { alert(e.message); }
+        };
+
+        // --- 4. MOTOR MUSICAL ---
+        const ALL = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+        const DISPLAY = ["Do", "Do#", "Re", "Mi b", "Mi", "Fa", "Fa#", "Sol", "La b", "La", "Si b", "Si"];
+        const INT = {
+            'major': [0,2,4,5,7,9,11,12], 'minor': [0,2,3,5,7,8,10,12],
+            'pent_maj': [0,2,4,7,9,12], 'blues': [0,3,5,6,7,10,12],
+            'chromatic': [0,1,2,3,4,5,6,7,8,9,10,11,12]
+        };
+
+        let freqs = [], names = [];
+
+        function genScale() {
+            const root = ALL.indexOf(document.getElementById('root-sel').value);
+            const pat = INT[document.getElementById('scale-sel').value];
+            freqs = []; names = [];
+
+            for(let oct=4; oct<=5; oct++) {
+                pat.forEach(s => {
+                    let idx = root + s;
+                    let actualOct = oct + Math.floor(idx/12);
+                    let localIdx = idx % 12;
+                    let midi = 12 * (actualOct+1) + localIdx;
+                    let f = 440 * Math.pow(2, (midi - 69) / 12);
+                    let n = DISPLAY[localIdx];
+                    if(s===12 && oct<5) return;
+                    freqs.push(f); names.push(n);
+                });
+            }
+            freqs.reverse(); names.reverse();
+        }
+        document.getElementById('root-sel').onchange = genScale;
+        document.getElementById('scale-sel').onchange = genScale;
+
+        // --- 5. TRACKING ---
+        function startTracking(v) {
+            const pose = new Pose({locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${f}`});
+            pose.setOptions({modelComplexity:1, smoothLandmarks:true, minDetectionConfidence:0.5});
+            pose.onResults(draw);
+            const l = async()=>{ if(!v.paused) await pose.send({image:v}); requestAnimationFrame(l); };
+            l();
+        }
+
+        const cvs = document.getElementById('output_canvas');
+        const ctx = cvs.getContext('2d');
+        // Selectores
+        const selT1 = document.getElementById('body-t1');
+        const selT2 = document.getElementById('body-t2');
+        const selVol = document.getElementById('body-vol');
+
+        function draw(res) {
+            cvs.width = res.image.width; cvs.height = res.image.height;
+            ctx.drawImage(res.image, 0, 0);
+            ctx.fillStyle = "rgba(10,10,10,0.6)"; ctx.fillRect(0,0,cvs.width,cvs.height);
+            drawLines();
+
+            if(res.poseLandmarks) {
+                // VOLUMEN
+                const lmVol = res.poseLandmarks[parseInt(selVol.value)];
+                if(lmVol) {
+                    let v = Math.max(0, Math.min(1, 1 - lmVol.y));
+                    if(isAudio) masterVol.gain.setTargetAtTime(v, audioCtx.currentTime, 0.1);
+                    document.getElementById('ui-vol').innerText = Math.round(v*100)+"%";
+                    drawPt(lmVol, '#e67e22');
+                }
+
+                // TONO 1
+                const lm1 = res.poseLandmarks[parseInt(selT1.value)];
+                if(lm1) {
+                    let i = getIdx(lm1.y);
+                    if(isAudio) osc1.frequency.setTargetAtTime(freqs[i], audioCtx.currentTime, 0.05);
+                    document.getElementById('ui-t1').innerText = names[i];
+                    drawPt(lm1, '#2ecc71');
+                    hiLine(i, '#2ecc71');
+                }
+
+                // TONO 2
+                if(activeVoices === 2) {
+                    if(isAudio) gain2.gain.setTargetAtTime(0.8, audioCtx.currentTime, 0.1);
+                    const lm2 = res.poseLandmarks[parseInt(selT2.value)];
+                    if(lm2) {
+                        let i = getIdx(lm2.y);
+                        if(isAudio) osc2.frequency.setTargetAtTime(freqs[i], audioCtx.currentTime, 0.05);
+                        document.getElementById('ui-t2').innerText = names[i];
+                        drawPt(lm2, '#00d2d3');
+                        hiLine(i, '#00d2d3');
+                    }
+                } else {
+                    if(isAudio) gain2.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+                }
+            }
+        }
+
+        function getIdx(y) {
+            let n = freqs.length; let i = Math.floor(y * n);
+            if(i>=n) i=n-1; if(i<0) i=0; return i;
+        }
+
+        function drawLines() {
+            let n = names.length; let h = cvs.height / n;
+            for(let i=0; i<n; i++) {
+                let y = (i*h) + (h/2);
+                ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cvs.width,y);
+                ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,0.1)"; ctx.stroke();
+                ctx.save(); ctx.translate(cvs.width-40, y+5); ctx.scale(-1,1);
+                ctx.fillStyle = "#aaa"; ctx.font = "14px sans-serif";
+                ctx.fillText(names[i], 0, 0); ctx.restore();
+            }
+        }
+
+        function hiLine(i, c) {
+            let n = names.length; let h = cvs.height / n; let y = (i*h) + (h/2);
+            ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cvs.width,y);
+            ctx.lineWidth = 3; ctx.strokeStyle = c; ctx.stroke();
+        }
+
+        function drawPt(lm, c) {
+            let x=lm.x*cvs.width; let y=lm.y*cvs.height;
+            ctx.beginPath(); ctx.arc(x,y,15,0,6.28); ctx.fillStyle=c; ctx.fill();
+            ctx.strokeStyle="white"; ctx.lineWidth=2; ctx.stroke();
+        }
+    </script>
+</body>
+</html>
